@@ -203,6 +203,153 @@ ORDER BY total_spent DESC;
 ```
 **Business Value:** Reveals the relationship between visit frequency and spending, helping management create effective cross-selling strategies and targeted promotions.
 
+#### 11. Advanced Customer Lifetime Value Analysis
+```sql
+-- Complex query using CTEs and window functions to calculate customer lifetime value
+-- and predict future value based on visit patterns and spending habits
+
+WITH MemberMetrics AS (
+    -- First CTE: Calculate base metrics for each member
+    SELECT 
+        m.member_id,
+        m.customer_id,
+        m.name,
+        m.age,
+        m.join_date,
+        m.is_active,
+        DATEDIFF(DAY, m.join_date, GETDATE()) AS days_as_member,
+        COUNT(DISTINCT v.visit_id) AS total_visits,
+        CASE WHEN COUNT(DISTINCT v.visit_id) > 0 
+             THEN DATEDIFF(DAY, m.join_date, GETDATE()) / CAST(COUNT(DISTINCT v.visit_id) AS FLOAT) 
+             ELSE NULL END AS days_between_visits
+    FROM 
+        Members m
+    LEFT JOIN 
+        Visits v ON m.member_id = v.member_id
+    GROUP BY 
+        m.member_id, m.customer_id, m.name, m.age, m.join_date, m.is_active
+),
+
+SpendingPatterns AS (
+    -- Second CTE: Calculate spending patterns
+    SELECT 
+        mm.member_id,
+        mm.customer_id,
+        COALESCE(SUM(s.price), 0) AS total_spending,
+        COALESCE(COUNT(s.sale_id), 0) AS transaction_count,
+        CASE WHEN mm.days_as_member > 0 
+             THEN COALESCE(SUM(s.price), 0) / mm.days_as_member * 30 
+             ELSE 0 END AS monthly_spend_rate,
+        COALESCE(AVG(s.price), 0) AS avg_transaction_value
+    FROM 
+        MemberMetrics mm
+    LEFT JOIN 
+        Sales s ON mm.customer_id = s.customer_id
+    GROUP BY 
+        mm.member_id, mm.customer_id, mm.days_as_member
+),
+
+EngagementScore AS (
+    -- Third CTE: Calculate engagement score
+    SELECT 
+        mm.member_id,
+        mm.customer_id,
+        mm.name,
+        mm.age,
+        mm.is_active,
+        mm.total_visits,
+        sp.total_spending,
+        sp.monthly_spend_rate,
+        -- Recency Factor (based on days since last visit)
+        CASE 
+            WHEN EXISTS (
+                SELECT 1 FROM Visits v 
+                WHERE v.member_id = mm.member_id 
+                AND DATEDIFF(DAY, v.date, GETDATE()) <= 14
+            ) THEN 3  -- Visited in last 14 days
+            WHEN EXISTS (
+                SELECT 1 FROM Visits v 
+                WHERE v.member_id = mm.member_id 
+                AND DATEDIFF(DAY, v.date, GETDATE()) <= 30
+            ) THEN 2  -- Visited in last 30 days
+            WHEN EXISTS (
+                SELECT 1 FROM Visits v 
+                WHERE v.member_id = mm.member_id
+            ) THEN 1  -- Has visited before
+            ELSE 0    -- Never visited
+        END AS recency_score,
+        
+        -- Frequency Score (based on visit frequency)
+        CASE 
+            WHEN mm.total_visits >= 20 THEN 3  -- High frequency
+            WHEN mm.total_visits >= 10 THEN 2  -- Medium frequency
+            WHEN mm.total_visits >= 1 THEN 1   -- Low frequency
+            ELSE 0                             -- No visits
+        END AS frequency_score,
+        
+        -- Monetary Score (based on spending)
+        CASE 
+            WHEN sp.total_spending >= 500 THEN 3  -- High spender
+            WHEN sp.total_spending >= 200 THEN 2  -- Medium spender
+            WHEN sp.total_spending > 0 THEN 1     -- Low spender
+            ELSE 0                                -- No spending
+        END AS monetary_score
+    FROM 
+        MemberMetrics mm
+    JOIN 
+        SpendingPatterns sp ON mm.member_id = sp.member_id
+)
+
+-- Final query: Calculate Customer Lifetime Value with segment classification
+SELECT 
+    es.member_id,
+    es.name,
+    es.age,
+    es.is_active,
+    es.total_visits,
+    es.total_spending,
+    es.monthly_spend_rate,
+    
+    -- Calculate RFM (Recency, Frequency, Monetary) Score
+    (es.recency_score + es.frequency_score + es.monetary_score) AS rfm_score,
+    
+    -- Estimate 12-month Customer Lifetime Value
+    CASE WHEN es.is_active = 1 
+         THEN es.monthly_spend_rate * 12 * (1 + (es.frequency_score * 0.1))
+         ELSE 0 
+    END AS projected_annual_value,
+    
+    -- Segment members into value categories
+    CASE 
+        WHEN (es.recency_score + es.frequency_score + es.monetary_score) >= 7 THEN 'Premium'
+        WHEN (es.recency_score + es.frequency_score + es.monetary_score) >= 4 THEN 'Core'
+        WHEN (es.recency_score + es.frequency_score + es.monetary_score) >= 1 THEN 'Casual'
+        ELSE 'At Risk'
+    END AS customer_segment,
+    
+    -- Churn probability based on activity patterns
+    CASE 
+        WHEN es.is_active = 0 THEN 1.0  -- Already churned
+        WHEN es.recency_score = 0 THEN 0.8  -- No recent visits
+        WHEN es.recency_score = 1 THEN 0.5  -- Low recency
+        WHEN es.recency_score = 2 THEN 0.2  -- Medium recency
+        ELSE 0.1  -- High recency
+    END AS churn_probability
+FROM 
+    EngagementScore es
+ORDER BY 
+    projected_annual_value DESC;
+```
+
+**Business Value:** This advanced analysis delivers multiple strategic insights:
+1. **Customer Lifetime Value Calculation** - Estimates future revenue from each customer based on their current patterns
+2. **Customer Segmentation** - Classifies members into Premium, Core, Casual, and At-Risk categories for targeted marketing
+3. **Churn Prediction** - Identifies members with high probability of cancellation, enabling preemptive retention actions
+4. **Revenue Forecasting** - Projects future revenue based on current member behavior
+5. **Marketing ROI Potential** - Helps determine appropriate acquisition costs for different customer segments
+
+By using CTEs, window functions, and sophisticated scoring algorithms, this query transforms raw transaction data into actionable business intelligence for strategic decision-making.
+
 ## Project Structure
 
 ```
