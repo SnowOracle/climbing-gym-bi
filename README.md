@@ -375,4 +375,6 @@ climbing_BI/
 
 ## Contact
 
-Your Name - [Your Email or LinkedIn] 
+
+
+linkedin.com/in/metrus 
